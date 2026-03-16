@@ -4,9 +4,9 @@ Skill consolidation harness. The experiment that closes the loop.
 
 ## Thesis
 
-Claude Code has a `create-skill` capability — the only procedure that writes procedures. That's the Consolidate cell. It's dimmed because the agent never initiates. This harness makes it automatic.
+Claude Code has `create-skill`: the only procedure that writes procedures. That's the Consolidate cell. Dimmed because the agent never initiates. This harness makes it automatic.
 
-The algorithm: track which action sequences repeat with user approval across sessions. When a pattern recurs above a threshold, condense it into a skill. Score the skill against a mutation. Winner survives. Two iterations to convergence.
+Track which action sequences repeat with user approval across sessions. When a pattern recurs above threshold, condense it into a skill. Score against a mutation. Winner survives. Two iterations to convergence.
 
 Three agents, three roles:
 - **Codex (GPT-5.4)** — scores skill variants against the contract. The A/B test harness.
@@ -51,7 +51,13 @@ The first skill to evolve. `humanize` has a well-defined contract:
 
 ### Test corpus
 
-Posts from `june.kim/_posts/` with known humanize results in the git history. The git diff is the ground truth: what the human actually accepted.
+Posts from `june.kim/_posts/` with humanize results in the git history. The diff is ground truth: what the human accepted.
+
+## The fixed point operator
+
+Qualifiers like "a bit" dampen a skill to idempotency. "Tighten every paragraph a bit" converges in two passes — the second finds almost nothing to cut. Without the qualifier, repeated application collapses the output to a single word.
+
+This is the convergence mechanism for skill mutation. Without a dampener, each mutation drifts further. With one, mutations that overshoot get corrected on the next evaluation. The qualifier is the Filter on the Filter.
 
 ## Success criteria
 
@@ -63,6 +69,7 @@ The harness produces a skill that:
 
 ## Prior art
 
+- [The Flicker](https://www.june.kim/the-flicker) — the blog post documenting this experiment
 - [The Natural Framework](https://www.june.kim/the-natural-framework) — the six steps
 - [Diagnosis LLM](https://www.june.kim/diagnosis-llm) — SOAP notes on the agent's broken cells
 - [Consolidation](https://www.june.kim/consolidation) — the procedural memory test
