@@ -5,6 +5,8 @@ We extract one action record per user→assistant turn, capturing the tool
 sequence used and whether the turn was approved (not interrupted).
 """
 
+from __future__ import annotations
+
 import json
 import os
 from pathlib import Path

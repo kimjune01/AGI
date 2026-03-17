@@ -3,21 +3,34 @@
 
 Reads hook input from stdin, runs extract.py on the transcript,
 updates the turn counter, and touches consolidation-due marker if threshold met.
+
+Finds the harness directory relative to this script's installed location
+via ~/.claude/memory/harness_path, written by install.sh.
 """
+
+from __future__ import annotations
 
 import json
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional
 
-HARNESS_DIR = Path.home() / "Documents" / "agi" / "harness"
 MEMORY_DIR = Path.home() / ".claude" / "memory"
 ACTIONS_DIR = MEMORY_DIR / "actions"
 TURN_COUNTER = MEMORY_DIR / "turn_counter.json"
 CONSOLIDATION_DUE = MEMORY_DIR / "consolidation-due"
 MEMORY_CONFIG = MEMORY_DIR / "config.json"
+HARNESS_PATH_FILE = MEMORY_DIR / "harness_path"
 
-sys.path.insert(0, str(HARNESS_DIR))
+
+def _find_harness() -> Optional[Path]:
+    """Resolve harness directory from the stored path."""
+    if HARNESS_PATH_FILE.exists():
+        p = Path(HARNESS_PATH_FILE.read_text().strip())
+        if p.exists():
+            return p
+    return None
 
 
 def main():
@@ -29,15 +42,18 @@ def main():
     if not transcript_path or not Path(transcript_path).exists():
         return
 
-    # Derive project name from cwd
+    harness = _find_harness()
+    if not harness:
+        return
+
+    sys.path.insert(0, str(harness))
+
     project = cwd.rstrip("/").rsplit("/", 1)[-1].replace(".", "-") if cwd else "unknown"
 
-    # Run extract
     from extract import extract_actions
     ACTIONS_DIR.mkdir(parents=True, exist_ok=True)
     n = extract_actions(Path(transcript_path), ACTIONS_DIR, session_id, project)
 
-    # Update turn counter
     counter = {"count": 0, "last_reset": datetime.now(timezone.utc).isoformat()}
     if TURN_COUNTER.exists():
         try:
@@ -48,12 +64,11 @@ def main():
     counter["count"] = counter.get("count", 0) + n
     TURN_COUNTER.write_text(json.dumps(counter) + "\n")
 
-    # Check threshold
-    threshold = 100
+    threshold = 1000
     if MEMORY_CONFIG.exists():
         try:
             cfg = json.loads(MEMORY_CONFIG.read_text())
-            threshold = cfg.get("turn_threshold", 100)
+            threshold = cfg.get("turn_threshold", 1000)
         except (json.JSONDecodeError, OSError):
             pass
 
