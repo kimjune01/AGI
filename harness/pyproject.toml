@@ -1,0 +1,12 @@
+[project]
+name = "agi-harness"
+version = "0.1.0"
+description = "Session logging and consolidation harness for Claude Code"
+requires-python = ">=3.11"
+dependencies = []
+
+[dependency-groups]
+dev = ["pytest"]
+
+[tool.pytest.ini_options]
+testpaths = ["."]

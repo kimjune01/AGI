@@ -16,21 +16,51 @@ Three agents, three roles:
 ## Architecture
 
 ```
-~/.claude/skills/          # the skill store (Remember)
-~/.claude/memory/          # session logs, co-activation counts
-Documents/AGI/variants/    # mutated skill candidates
-Documents/AGI/results/     # scoring logs
+~/.claude/hooks/session-end-extract.py   # SessionEnd hook (thin shim)
+                    │
+                    ▼
+Documents/agi/harness/
+├── extract.py          # parse JSONL transcript → action records
+├── perceive.py         # find repeating subsequences
+├── cluster.py          # group similar patterns (Jaccard + edit distance)
+├── filter.py           # threshold check, dedupe vs existing skills
+├── propose.py          # format candidate as draft SKILL.md
+├── backfill.py         # one-shot: extract all existing transcripts
+├── config.py           # path constants, thresholds
+├── test_extract.py     # tests
+└── test_perceive.py    # tests
+
+~/.claude/memory/
+├── actions/            # one JSONL per session (action records)
+├── config.json         # turn_threshold, min_coactivation
+├── turn_counter.json   # accumulator, triggers consolidation
+└── consolidation-due   # zero-byte marker (presence = signal)
+
+~/.claude/skills/       # the skill store (Remember)
+Documents/agi/variants/ # mutated skill candidates
+Documents/agi/results/  # scoring logs
 ```
 
 ## The loop
 
 ```
-1. PERCEIVE   Scan session logs for repeating action sequences
-2. CACHE      Cluster by embedding similarity
-3. FILTER     Reject patterns below co-activation threshold
-4. ATTEND     Human reviews candidates (sleep replay)
-5. CONSOLIDATE  Write winning pattern as a skill file
-6. REMEMBER   Skill persists in ~/.claude/skills/
+SessionEnd hook
+    │
+    ▼
+extract.py → ~/.claude/memory/actions/{session_id}.jsonl
+    │
+    └─► turn_counter.json (accumulator)
+            │
+            ├─ counter < N → done
+            └─ counter >= N → touch consolidation-due
+                                │
+                                ▼
+1. PERCEIVE     perceive.py — find repeating tool subsequences
+2. CACHE        cluster.py  — group by Jaccard + edit distance
+3. FILTER       filter.py   — reject homogeneous, below-threshold
+4. ATTEND       human reviews candidates.md
+5. CONSOLIDATE  propose.py → write winning pattern as SKILL.md
+6. REMEMBER     skill persists in ~/.claude/skills/
 ```
 
 ## Experiment 1: Humanize mutation

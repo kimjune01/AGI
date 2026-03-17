@@ -1,0 +1,109 @@
+"""Tests for perceive.py — find repeating tool subsequences across sessions."""
+
+import json
+import tempfile
+from pathlib import Path
+
+from perceive import find_patterns, load_actions
+
+
+def _write_actions(tmpdir: Path, session_id: str, actions: list[dict]) -> Path:
+    """Write action records to a JSONL file in tmpdir."""
+    outfile = tmpdir / f"{session_id}.jsonl"
+    with open(outfile, "w") as f:
+        for a in actions:
+            f.write(json.dumps(a) + "\n")
+    return outfile
+
+
+def _action(tool_seq: list[list[str]], approved: bool = True, project: str = "test",
+            session_id: str = "s1", turn_index: int = 0):
+    return {
+        "session_id": session_id,
+        "project": project,
+        "timestamp": "2026-03-17T01:00:00Z",
+        "turn_index": turn_index,
+        "prompt_prefix": "test prompt",
+        "tool_sequence": tool_seq,
+        "approved": approved,
+    }
+
+
+class TestLoadActions:
+    def test_loads_from_dir(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmpdir = Path(d)
+            _write_actions(tmpdir, "s1", [
+                _action([["Read", ".md"], ["Edit", ".md"]]),
+                _action([["Bash", "git"]]),
+            ])
+            _write_actions(tmpdir, "s2", [
+                _action([["Read", ".py"]], session_id="s2"),
+            ])
+            actions = load_actions(tmpdir)
+            assert len(actions) == 3
+
+    def test_filters_unapproved(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmpdir = Path(d)
+            _write_actions(tmpdir, "s1", [
+                _action([["Read", ".md"]], approved=True),
+                _action([["Read", ".md"]], approved=False),
+            ])
+            actions = load_actions(tmpdir, approved_only=True)
+            assert len(actions) == 1
+
+    def test_filters_by_project(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmpdir = Path(d)
+            _write_actions(tmpdir, "s1", [
+                _action([["Read", ".md"]], project="june-kim"),
+                _action([["Read", ".py"]], project="other"),
+            ])
+            actions = load_actions(tmpdir, project="june-kim")
+            assert len(actions) == 1
+
+
+class TestFindPatterns:
+    def test_finds_repeated_sequence(self):
+        """Read→Edit→Bash appearing 3+ times should be detected."""
+        seq = [["Read", ".md"], ["Edit", ".md"], ["Bash", "git"]]
+        actions = [_action(seq, session_id=f"s{i}", turn_index=i) for i in range(5)]
+
+        patterns = find_patterns(actions, min_count=3)
+        # The exact sequence should appear
+        found = [p for p in patterns if p["sequence"] == [tuple(t) for t in seq]]
+        assert len(found) > 0
+        assert found[0]["count"] >= 5
+
+    def test_finds_subsequences(self):
+        """Read→Edit as a subsequence of Read→Edit→Bash should be found."""
+        actions = [
+            _action([["Read", ".md"], ["Edit", ".md"], ["Bash", "git"]], session_id="s1"),
+            _action([["Read", ".md"], ["Edit", ".md"]], session_id="s2"),
+            _action([["Read", ".md"], ["Edit", ".md"], ["Bash", "bundle"]], session_id="s3"),
+        ]
+        patterns = find_patterns(actions, min_count=2, min_length=2, max_length=3)
+        # Read→Edit should appear at least 3 times
+        re_pattern = [p for p in patterns if p["sequence"] == [("Read", ".md"), ("Edit", ".md")]]
+        assert len(re_pattern) > 0
+        assert re_pattern[0]["count"] >= 3
+
+    def test_respects_min_count(self):
+        """Sequences appearing fewer than min_count times should not be returned."""
+        actions = [
+            _action([["Read", ".md"], ["Edit", ".md"]], session_id="s1"),
+            _action([["Bash", "npm"]], session_id="s2"),
+        ]
+        patterns = find_patterns(actions, min_count=3)
+        assert len(patterns) == 0
+
+    def test_empty_actions(self):
+        patterns = find_patterns([], min_count=1)
+        assert patterns == []
+
+    def test_ignores_empty_sequences(self):
+        """Actions with empty tool sequences should not contribute patterns."""
+        actions = [_action([], session_id=f"s{i}") for i in range(5)]
+        patterns = find_patterns(actions, min_count=1, min_length=1)
+        assert len(patterns) == 0
