@@ -112,22 +112,26 @@ The harness produces a skill that:
 3. Requires less human direction to apply fixes (autonomy)
 4. Changes how the agent processes the next post (the consolidation test)
 
-## Install
+## Quick start
+
+1. Clone this repo anywhere
+2. Open the repo in Claude Code
+3. Say: **"Set up the consolidation harness"**
+
+That's it. Claude reads `CLAUDE.md`, runs `install.sh`, backfills your transcripts, and the hooks take it from there. Every session after that is indexed automatically. When enough turns accumulate, Claude will prompt you to run consolidation.
+
+### Manual install
 
 ```bash
-# Install hooks
 bash hooks/install.sh
-
-# Add to ~/.claude/settings.json:
-# "SessionStart": [{"hooks": [{"type": "command", "command": "bash ~/.claude/hooks/consolidation-check.sh"}]}]
-# "SessionEnd": [{"hooks": [{"type": "command", "command": "python3 ~/.claude/hooks/session-end-extract.py"}]}]
-
-# Backfill existing transcripts (one-time)
 cd harness && uv run python backfill.py
-
-# Run pipeline manually
-cd harness && uv run python run_pipeline.py
 ```
+
+### Requirements
+
+- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) with hooks support
+- Python 3.9+
+- [uv](https://docs.astral.sh/uv/)
 
 ## Prior art
 
