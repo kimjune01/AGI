@@ -16,51 +16,53 @@ Three agents, three roles:
 ## Architecture
 
 ```
-~/.claude/hooks/session-end-extract.py   # SessionEnd hook (thin shim)
-                    │
-                    ▼
-Documents/agi/harness/
-├── extract.py          # parse JSONL transcript → action records
-├── perceive.py         # find repeating subsequences
-├── cluster.py          # group similar patterns (Jaccard + edit distance)
-├── filter.py           # threshold check, dedupe vs existing skills
-├── propose.py          # format candidate as draft SKILL.md
-├── backfill.py         # one-shot: extract all existing transcripts
-├── config.py           # path constants, thresholds
-├── test_extract.py     # tests
-└── test_perceive.py    # tests
+hooks/
+├── session-end-extract.py    # SessionEnd: transcript → action records
+├── consolidation-check.sh    # SessionStart: prompt when consolidation due
+└── install.sh                # copies hooks to ~/.claude/hooks/
+
+harness/
+├── extract.py                # parse JSONL transcript → action records
+├── perceive.py               # intent-first clustering (TF-IDF on prompts)
+├── cluster.py                # group similar patterns (Jaccard + edit distance)
+├── filter.py                 # reject homogeneous, below-threshold
+├── propose.py                # format candidate as draft SKILL.md
+├── run_pipeline.py           # one-command full pipeline run
+├── backfill.py               # one-shot: extract all existing transcripts
+├── config.py                 # path constants, thresholds
+├── test_extract.py           # 18 tests
+└── test_perceive.py          # 18 tests
 
 ~/.claude/memory/
-├── actions/            # one JSONL per session (action records)
-├── config.json         # turn_threshold, min_coactivation
-├── turn_counter.json   # accumulator, triggers consolidation
-└── consolidation-due   # zero-byte marker (presence = signal)
-
-~/.claude/skills/       # the skill store (Remember)
-Documents/agi/variants/ # mutated skill candidates
-Documents/agi/results/  # scoring logs
+├── actions/                  # one JSONL per session (action records)
+├── config.json               # turn_threshold (1000), min_coactivation (3)
+├── turn_counter.json         # accumulator, triggers consolidation
+└── consolidation-due         # zero-byte marker (presence = signal)
 ```
 
 ## The loop
 
 ```
-SessionEnd hook
+SessionEnd hook fires
     │
     ▼
 extract.py → ~/.claude/memory/actions/{session_id}.jsonl
     │
-    └─► turn_counter.json (accumulator)
+    └─► turn_counter.json += turns
             │
-            ├─ counter < N → done
-            └─ counter >= N → touch consolidation-due
-                                │
-                                ▼
-1. PERCEIVE     perceive.py — find repeating tool subsequences
-2. CACHE        cluster.py  — group by Jaccard + edit distance
-3. FILTER       filter.py   — reject homogeneous, below-threshold
-4. ATTEND       human reviews candidates.md
-5. CONSOLIDATE  propose.py → write winning pattern as SKILL.md
-6. REMEMBER     skill persists in ~/.claude/skills/
+            ├─ counter < 1000 → done
+            └─ counter >= 1000 → touch consolidation-due
+                                    │
+                                    ▼
+                    SessionStart hook sees marker
+                    prompts Claude to run pipeline
+                                    │
+                                    ▼
+1. PERCEIVE     perceive.py — cluster by intent (TF-IDF on prompts)
+2. FILTER       filter.py   — reject homogeneous, below-threshold
+3. ATTEND       human reviews candidates.md
+4. CONSOLIDATE  propose.py → write winning pattern as SKILL.md
+5. REMEMBER     skill persists in ~/.claude/skills/
 ```
 
 ## Experiment 1: Humanize mutation
@@ -79,9 +81,22 @@ The first skill to evolve. `humanize` has a well-defined contract:
 5. Winner replaces the skill. Loser is logged.
 6. Repeat until convergence (expected: 2 iterations per the [slop-detection result](https://www.june.kim/slop-detection))
 
-### Test corpus
+### Result
 
-Posts from `june.kim/_posts/` with humanize results in the git history. The diff is ground truth: what the human accepted.
+Round 1 ([001](results/001-disposable-analogies.md)): mutation too narrow, no recall gain. A wins on parsimony.
+
+## Experiment 2: Session logging harness
+
+Backfilled 446 transcripts → 13,427 action records. First pipeline run with n-gram perceive found 70 candidates but the top results were all Read→Edit (frequency ≠ importance). Replaced with intent-first perceive using TF-IDF on prompt tokens.
+
+### Result
+
+Intent-first surfaces real workflows:
+- **"improve"** → Read(.md) → Edit(.md) → Edit(.md)
+- **"commit + push"** → Bash(git) × 5
+- **"backend + sst + production"** → Bash(cd) → Bash(turso) → Bash(pnpm) → Bash(export) → Bash(curl)
+
+Remaining weakness: single-word continuations ("yes", "fix") lose the intent from the previous turn. See [002](results/002-session-logging-harness.md).
 
 ## The fixed point operator
 
@@ -96,6 +111,23 @@ The harness produces a skill that:
 2. Flags fewer false patterns (precision)
 3. Requires less human direction to apply fixes (autonomy)
 4. Changes how the agent processes the next post (the consolidation test)
+
+## Install
+
+```bash
+# Install hooks
+bash hooks/install.sh
+
+# Add to ~/.claude/settings.json:
+# "SessionStart": [{"hooks": [{"type": "command", "command": "bash ~/.claude/hooks/consolidation-check.sh"}]}]
+# "SessionEnd": [{"hooks": [{"type": "command", "command": "python3 ~/.claude/hooks/session-end-extract.py"}]}]
+
+# Backfill existing transcripts (one-time)
+cd harness && uv run python backfill.py
+
+# Run pipeline manually
+cd harness && uv run python run_pipeline.py
+```
 
 ## Prior art
 
