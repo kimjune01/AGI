@@ -4,7 +4,14 @@ import json
 import tempfile
 from pathlib import Path
 
-from perceive import find_patterns, load_actions
+from perceive import (
+    find_intent_patterns,
+    find_patterns,
+    load_actions,
+    _tokenize_prompt,
+    _intent_signature,
+    _compute_idf,
+)
 
 
 def _write_actions(tmpdir: Path, session_id: str, actions: list[dict]) -> Path:
@@ -17,13 +24,13 @@ def _write_actions(tmpdir: Path, session_id: str, actions: list[dict]) -> Path:
 
 
 def _action(tool_seq: list[list[str]], approved: bool = True, project: str = "test",
-            session_id: str = "s1", turn_index: int = 0):
+            session_id: str = "s1", turn_index: int = 0, prompt: str = "test prompt"):
     return {
         "session_id": session_id,
         "project": project,
         "timestamp": "2026-03-17T01:00:00Z",
         "turn_index": turn_index,
-        "prompt_prefix": "test prompt",
+        "prompt_prefix": prompt,
         "tool_sequence": tool_seq,
         "approved": approved,
     }
@@ -107,3 +114,93 @@ class TestFindPatterns:
         actions = [_action([], session_id=f"s{i}") for i in range(5)]
         patterns = find_patterns(actions, min_count=1, min_length=1)
         assert len(patterns) == 0
+
+
+# --- Tokenizer tests ---
+
+class TestTokenizePrompt:
+    def test_strips_stop_words(self):
+        tokens = _tokenize_prompt("improve the post about unions")
+        assert "the" not in tokens
+        assert "about" not in tokens
+        assert "improve" in tokens
+        assert "unions" in tokens
+
+    def test_strips_xml_tags(self):
+        tokens = _tokenize_prompt("<command-name>/humanize</command-name> run it")
+        assert "command-name" not in tokens
+        assert "humanize" in tokens or "/humanize" in tokens
+
+    def test_strips_system_noise(self):
+        tokens = _tokenize_prompt("[Request interrupted by user]")
+        # "request", "interrupted", "user" are all stop words
+        assert len(tokens) == 0
+
+    def test_strips_image_refs(self):
+        tokens = _tokenize_prompt("[image: source: /var/folders/foo] check this")
+        assert "check" in tokens
+        assert "source" not in tokens
+
+
+# --- Intent signature tests ---
+
+class TestIntentSignature:
+    def test_picks_high_idf_tokens(self):
+        actions = [
+            _action([], prompt="improve the blog post"),
+            _action([], prompt="improve the blog post"),
+            _action([], prompt="deploy kindwatch backend"),
+            _action([], prompt="deploy kindwatch backend"),
+            _action([], prompt="fix the login bug"),
+        ]
+        idf = _compute_idf(actions)
+        # "kindwatch" appears in 2/5 docs, "improve" in 2/5, "fix" in 1/5
+        # "fix" and "login" should have highest IDF
+        sig = _intent_signature("fix the login bug", idf, top_k=2)
+        assert "login" in sig or "bug" in sig or "fix" in sig
+
+    def test_empty_prompt(self):
+        sig = _intent_signature("", {}, top_k=3)
+        assert sig == ()
+
+
+# --- Intent-first pattern finding ---
+
+class TestFindIntentPatterns:
+    def test_groups_by_intent(self):
+        """Actions with similar prompts should cluster together."""
+        actions = (
+            [_action([["Read", ".md"], ["Edit", ".md"]],
+                     prompt="improve the blog post about unions",
+                     session_id=f"s{i}") for i in range(6)]
+            + [_action([["Bash", "git"], ["Bash", "git"]],
+                       prompt="commit and push changes",
+                       session_id=f"t{i}") for i in range(6)]
+        )
+        patterns = find_intent_patterns(actions, min_count=3)
+        assert len(patterns) >= 2
+        # Each group should have its own canonical sequence
+        sequences = [tuple(tuple(t) for t in p["canonical_sequence"]) for p in patterns]
+        assert (("Read", ".md"), ("Edit", ".md")) in sequences
+        assert (("Bash", "git"), ("Bash", "git")) in sequences
+
+    def test_respects_min_count(self):
+        actions = [
+            _action([["Read", ".md"]], prompt="improve blog post", session_id="s1"),
+            _action([["Read", ".md"]], prompt="improve blog post", session_id="s2"),
+        ]
+        patterns = find_intent_patterns(actions, min_count=5)
+        assert len(patterns) == 0
+
+    def test_empty_actions(self):
+        assert find_intent_patterns([], min_count=1) == []
+
+    def test_tracks_sessions(self):
+        actions = [
+            _action([["Read", ".md"], ["Edit", ".md"]],
+                    prompt="improve blog post",
+                    session_id=f"s{i}") for i in range(5)
+        ]
+        patterns = find_intent_patterns(actions, min_count=3)
+        assert len(patterns) >= 1
+        assert patterns[0]["sessions"] == 5
