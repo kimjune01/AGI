@@ -1,146 +1,65 @@
 # AGI
 
-Skill consolidation harness. The experiment that closes the loop.
+**Status: concluded, null result (May 2026).** Hooks unwired; archive removed; this repo is preserved as the artifact, not as a live system.
 
-## Thesis
+## What it was
 
-Claude Code has `create-skill`: the only procedure that writes procedures. That's the Consolidate cell. Dimmed because the agent never initiates. This harness makes it automatic.
+A consolidation harness for Claude Code. The premise: action sequences that recur across sessions with human approval are evidence of a procedure worth condensing into a skill. Wire a SessionEnd hook to extract action records, count turns, trigger a pipeline at threshold, surface candidate patterns for human approval.
 
-Track which action sequences repeat with user approval across sessions. When a pattern recurs above threshold, condense it into a skill. Score against a mutation. Winner survives. Two iterations to convergence.
+Architecture in three movements:
+1. **Perceive.** Extract action records from transcripts. Cluster by intent (TF-IDF on prompt tokens) rather than n-gram frequency.
+2. **Filter.** Reject homogeneous patterns, below-threshold counts, candidates that can't fit a skill contract.
+3. **Attend.** Human reviews `candidates.md`, picks what to consolidate.
 
-Three agents, three roles:
-- **Codex (GPT-5.4)** — scores skill variants against the contract. The A/B test harness.
-- **Claude Code** — creates and mutates skills. The skill mutator.
-- **Human** — approves or rejects consolidated skills. The Attend.
+Ran end-to-end. Extracted 27,844 actions across hundreds of sessions. Found 44 patterns, filtered to 7 candidates.
 
-## Architecture
+## Why it didn't pan out
 
-```
-hooks/
-├── session-end-extract.py    # SessionEnd: transcript → action records
-├── consolidation-check.sh    # SessionStart: prompt when consolidation due
-└── install.sh                # copies hooks to ~/.claude/hooks/
+The candidates were too generic to encode. Top finds:
 
-harness/
-├── extract.py                # parse JSONL transcript → action records
-├── perceive.py               # intent-first clustering (TF-IDF on prompts)
-├── cluster.py                # group similar patterns (Jaccard + edit distance)
-├── filter.py                 # reject homogeneous, below-threshold
-├── propose.py                # format candidate as draft SKILL.md
-├── run_pipeline.py           # one-command full pipeline run
-├── backfill.py               # one-shot: extract all existing transcripts
-├── config.py                 # path constants, thresholds
-├── test_extract.py           # 18 tests
-└── test_perceive.py          # 18 tests
+- `Read(.md) → Edit(.md) → Edit(.md)` — the blog-edit triple
+- `Edit(.css) → Bash(cd)` — CSS tweak + dir hop
+- A long `Read → Edit → Bash(go) → Bash(make)` chain — Go iterate loop
 
-~/.claude/memory/
-├── actions/                  # one JSONL per session (action records)
-├── config.json               # turn_threshold (1000), min_coactivation (3)
-├── turn_counter.json         # accumulator, triggers consolidation
-└── consolidation-due         # zero-byte marker (presence = signal)
-```
+None of these are skills. They're file-extension shapes. The actual knowledge that would make them useful — *which* markdown file, *what* prose pattern, *what* CSS property, *which* Go invariant — lives in the project, not in the cross-session action stream.
 
-## The loop
+The framing error: skills aren't generic procedures over file types. The valuable skills already written (`humanize`, `tighten`, `sharpen`, `not-but`) are specific rewrites tied to specific patterns in a specific corpus. Cross-project pattern mining strips exactly the context that makes a skill load-bearing.
 
-```
-SessionEnd hook fires
-    │
-    ▼
-extract.py → ~/.claude/memory/actions/{session_id}.jsonl
-    │
-    └─► turn_counter.json += turns
-            │
-            ├─ counter < 1000 → done
-            └─ counter >= 1000 → touch consolidation-due
-                                    │
-                                    ▼
-                    SessionStart hook sees marker
-                    prompts Claude to run pipeline
-                                    │
-                                    ▼
-1. PERCEIVE     perceive.py — cluster by intent (TF-IDF on prompts)
-2. FILTER       filter.py   — reject homogeneous, below-threshold
-3. ATTEND       human reviews candidates.md
-4. CONSOLIDATE  propose.py → write winning pattern as SKILL.md
-5. REMEMBER     skill persists in ~/.claude/skills/
-```
+In hindsight, the right unit isn't "action sequence that repeats." It's "judgment that turned out to be correct in retrospect, in this domain." That judgment is hard to extract from logs — it lives in the moments where the user said *yeah that's right* or *no go back*. The harness recorded actions, not verdicts.
 
-## Experiment 1: Humanize mutation
+## What's worth keeping
 
-The first skill to evolve. `humanize` has a well-defined contract:
-- Input: a blog post
-- Output: list of AI patterns found + opportunities for voice
-- Verifiable: did the fix improve the prose?
+Two findings survive the null result and have already been absorbed into other work:
 
-### Protocol
+**Frequency ≠ importance.** N-gram counts surface the most common file-extension shapes, which are noise. TF-IDF on prompt tokens (intent-first perceive) surfaces what the user was *trying to do*, which is closer to signal. Useful pattern for any downstream observability that wants to summarize sessions.
 
-1. Read current `humanize/SKILL.md`
-2. Codex proposes one mutation (add a pattern, remove a pattern, change a threshold)
-3. Run both variants on the same test post
-4. Codex scores: which output better satisfies the contract?
-5. Winner replaces the skill. Loser is logged.
-6. Repeat until convergence (expected: 2 iterations per the [slop-detection result](https://www.june.kim/slop-detection))
+**"A bit" is a fixed-point operator.** Qualifiers like "a bit" dampen rewrite skills to idempotency: the second pass finds almost nothing to change. Without the qualifier, repeated application collapses the output to a stub. This is the convergence mechanism that lets composable rewrite skills (tighten, humanize, sharpen) run in a loop without drift. It's now load-bearing in those skills' contracts.
 
-### Result
+## What was wired up
 
-Round 1 ([001](results/001-disposable-analogies.md)): mutation too narrow, no recall gain. A wins on parsimony.
+For the historical record:
 
-## Experiment 2: Session logging harness
+- `hooks/session-end-extract.py` — transcript → action records
+- `hooks/consolidation-check.sh` — SessionStart prompt when turn-counter tripped
+- `harness/extract.py` + `perceive.py` + `cluster.py` + `filter.py` + `propose.py` + `run_pipeline.py`
+- State directories at `~/.claude/memory/{actions/,turn_counter.json,config.json,consolidation-due}`
 
-Backfilled 446 transcripts → 13,427 action records. First pipeline run with n-gram perceive found 70 candidates but the top results were all Read→Edit (frequency ≠ importance). Replaced with intent-first perceive using TF-IDF on prompt tokens.
+All of the above has been removed from the live environment. The code remains in this repo.
 
-### Result
-
-Intent-first surfaces real workflows:
-- **"improve"** → Read(.md) → Edit(.md) → Edit(.md)
-- **"commit + push"** → Bash(git) × 5
-- **"backend + sst + production"** → Bash(cd) → Bash(turso) → Bash(pnpm) → Bash(export) → Bash(curl)
-
-Remaining weakness: single-word continuations ("yes", "fix") lose the intent from the previous turn. See [002](results/002-session-logging-harness.md).
-
-## The fixed point operator
-
-Qualifiers like "a bit" dampen a skill to idempotency. "Tighten every paragraph a bit" converges in two passes — the second finds almost nothing to cut. Without the qualifier, repeated application collapses the output to a single word.
-
-This is the convergence mechanism for skill mutation. Without a dampener, each mutation drifts further. With one, mutations that overshoot get corrected on the next evaluation. The qualifier is the Filter on the Filter.
-
-## Success criteria
-
-The harness produces a skill that:
-1. Finds more true patterns than the current skill (recall)
-2. Flags fewer false patterns (precision)
-3. Requires less human direction to apply fixes (autonomy)
-4. Changes how the agent processes the next post (the consolidation test)
-
-## Quick start
-
-1. Clone this repo anywhere
-2. Open the repo in Claude Code
-3. Say: **"Set up the consolidation harness"**
-
-That's it. Claude reads `CLAUDE.md`, runs `install.sh`, backfills your transcripts, and the hooks take it from there. Every session after that is indexed automatically. When enough turns accumulate, Claude will prompt you to run consolidation.
-
-### Manual install
+## How to revive (if you want to)
 
 ```bash
 bash hooks/install.sh
 cd harness && uv run python backfill.py
 ```
 
-### Requirements
-
-- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) with hooks support
-- Python 3.9+
-- [uv](https://docs.astral.sh/uv/)
+But don't, unless the framing has shifted. The substrate works; the premise is what failed.
 
 ## Prior art
 
-- [The Flicker](https://www.june.kim/the-flicker) — the blog post documenting this experiment
-- [The Natural Framework](https://www.june.kim/the-natural-framework) — the six steps
-- [Diagnosis LLM](https://www.june.kim/diagnosis-llm) — SOAP notes on the agent's broken cells
-- [Consolidation](https://www.june.kim/consolidation) — the procedural memory test
-- [The Parts Bin](https://www.june.kim/the-parts-bin) — candidate algorithms for each cell
-- [Slop Detection](https://www.june.kim/slop-detection) — two iterations to convergence
+- [The Flicker](https://www.june.kim/the-flicker) — the blog post that motivated this experiment
+- [The Natural Framework](https://www.june.kim/the-natural-framework) — Consolidate as the backward pass
+- [Slop Detection](https://www.june.kim/slop-detection) — where the two-passes-to-convergence pattern came from
 
 ## License
 
